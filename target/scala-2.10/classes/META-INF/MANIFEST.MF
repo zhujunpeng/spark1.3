@@ -1,0 +1,12 @@
+Manifest-Version: 1.0
+Implementation-Title: Spark Project Core
+Implementation-Version: 1.3.0
+Built-By: zjp
+Specification-Vendor: The Apache Software Foundation
+Specification-Title: Spark Project Core
+Implementation-Vendor-Id: org.apache.spark
+Build-Jdk: 1.8.0_161
+Specification-Version: 1.3.0
+Created-By: Maven Integration for Eclipse
+Implementation-Vendor: The Apache Software Foundation
+
