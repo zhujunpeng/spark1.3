@@ -104,6 +104,12 @@ class FileShuffleBlockManager(conf: SparkConf)
   /**
    * Get a ShuffleWriterGroup for the given map task, which will register it as complete
    * when the writers are closed successfully
+   * 
+   * 给每个Maptask获取一个shuffleMapGroup
+   * 
+   * 对于普通的shuffle操作，会对每个bucket，在本地都会生成一个本地的shuffleBlockFile
+   * 开启了consolidateShuffleFiles的方式会根据ShuffleFileGroup的方式创建一个shuffleBlockFile，
+   * 这样会大大减少shuffleBlockFile的数量，减少磁盘IO，提高性能
    */
   def forMapTask(shuffleId: Int, mapId: Int, numBuckets: Int, serializer: Serializer,
       writeMetrics: ShuffleWriteMetrics) = {
@@ -111,17 +117,28 @@ class FileShuffleBlockManager(conf: SparkConf)
       shuffleStates.putIfAbsent(shuffleId, new ShuffleState(numBuckets))
       private val shuffleState = shuffleStates(shuffleId)
       private var fileGroup: ShuffleFileGroup = null
-
+      // shuffle 有两种模式 如果是开启了consolidate，-----//那么在一个task中，有多少个输出的partition就会有多少个中间文件，默认为false
+      // 开启了这种方式的话就不会给每个bucket都创建一个磁盘文件，而是为这个bucket获取一个ShuffleFileGroup的writer
       val writers: Array[BlockObjectWriter] = if (consolidateShuffleFiles) {
         fileGroup = getUnusedFileGroup()
         Array.tabulate[BlockObjectWriter](numBuckets) { bucketId =>
+          // 根据shuffleId、mapId、bucketId生成一个唯一的blockId
+          // 然后使用这个blockId，调用ShuffleFileGroup的apply方法，为这个bucket获取一个shuffleFileGroup
           val blockId = ShuffleBlockId(shuffleId, mapId, bucketId)
+          // 然后针对shuffleFileGroup获取一个writer
+          /**
+           * 在这里就开启了consolidate机制。实际上每个bucket，都会针对ShuffleFileGroup获取writer
+           * 而不是针对每个bucket都获取一个writer，这样就实现了多个bucket文件的合并
+           */
           blockManager.getDiskWriter(blockId, fileGroup(bucketId), serializer, bufferSize,
             writeMetrics)
         }
       } else {
+        // 普通shuffle操作
         Array.tabulate[BlockObjectWriter](numBuckets) { bucketId =>
+          // 生成blockId
           val blockId = ShuffleBlockId(shuffleId, mapId, bucketId)
+          // 根据blockId创建一个blockFile
           val blockFile = blockManager.diskBlockManager.getFile(blockId)
           // Because of previous failures, the shuffle file may already exist on this machine.
           // If so, remove it.
@@ -132,6 +149,7 @@ class FileShuffleBlockManager(conf: SparkConf)
               logWarning(s"Failed to remove existing shuffle file $blockFile")
             }
           }
+          // 针对blockFile生成一个writer
           blockManager.getDiskWriter(blockId, blockFile, serializer, bufferSize, writeMetrics)
         }
       }

@@ -39,10 +39,15 @@ private[hash] object BlockStoreShuffleFetcher extends Logging {
     val blockManager = SparkEnv.get.blockManager
 
     val startTime = System.currentTimeMillis
+    
+    // shuffleId可以代表当前stage的上一个stage，shuffle是分成两个stage的分界点
+    // shuffle write发生在上一个stage中，shuffle read发生下在一个stage中
+    // 首先通过shuffleId可以限制到上一个stage的所有shuffleMapTask的输出MapStatus
+    // 然后通过reduceId也就是bucketId可以从每个Mapstatus获取当前这个resultTask需要获取的每个shuffleMapTask信息
     val statuses = SparkEnv.get.mapOutputTracker.getServerStatuses(shuffleId, reduceId)
     logDebug("Fetching map output location for shuffle %d, reduce %d took %d ms".format(
       shuffleId, reduceId, System.currentTimeMillis - startTime))
-
+    // 对获取到的数据进行数据格式的转化
     val splitsByAddress = new HashMap[BlockManagerId, ArrayBuffer[(Int, Long)]]
     for (((address, size), index) <- statuses.zipWithIndex) {
       splitsByAddress.getOrElseUpdate(address, ArrayBuffer()) += ((index, size))
@@ -72,7 +77,12 @@ private[hash] object BlockStoreShuffleFetcher extends Logging {
         }
       }
     }
-
+     /**
+     * 处理步骤如下:
+     * 1)从远程节点或者本地读取中间计算结果
+     * 2)对InterruptibleIterator执行聚合
+     * 3)对InterruptibleIterator排序,由于使用ExternalSorter的inertAll
+     */
     val blockFetcherItr = new ShuffleBlockFetcherIterator(
       context,
       SparkEnv.get.blockManager.shuffleClient,
@@ -81,7 +91,7 @@ private[hash] object BlockStoreShuffleFetcher extends Logging {
       serializer,
       SparkEnv.get.conf.getLong("spark.reducer.maxMbInFlight", 48) * 1024 * 1024)
     val itr = blockFetcherItr.flatMap(unpackBlock)
-
+    // 最后将获取到的文件
     val completionIter = CompletionIterator[T, Iterator[T]](itr, {
       context.taskMetrics.updateShuffleReadMetrics()
     })

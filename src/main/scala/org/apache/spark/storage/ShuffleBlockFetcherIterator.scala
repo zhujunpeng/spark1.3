@@ -135,7 +135,9 @@ final class ShuffleBlockFetcherIterator(
       }
     }
   }
-
+  /**
+   * 获取远程Block,用于远程请求中间结果
+   */
   private[this] def sendRequest(req: FetchRequest) {
     logDebug("Sending request for %d blocks (%s) from %s".format(
       req.blocks.size, Utils.bytesToString(req.size), req.address.hostPort))
@@ -246,17 +248,30 @@ final class ShuffleBlockFetcherIterator(
       }
     }
   }
-
+  /**
+   * 读取中间结果初始化过程如下:
+   * 1)splitLocalRemoteBlocks划分本地读取和远程读取的Block请求
+   * 2)FetchRequest随机排序后存入fetchRequests中
+   * 3)遍历fetchRequests中的所有FetchRequest,远程请求Block中间结果
+   * 4)调用fetchLocalBlocks获取本地Block
+   */
   private[this] def initialize(): Unit = {
     // Add a task completion callback (called in both success case and failure case) to cleanup.
     context.addTaskCompletionListener(_ => cleanup())
 
     // Split local and remote blocks.
+    // 切分本地和远程的block
     val remoteRequests = splitLocalRemoteBlocks()
     // Add the remote requests into our queue in a random order
+    // 切分完block之后，进行随机排序操作
     fetchRequests ++= Utils.randomize(remoteRequests)
 
     // Send out initial requests for blocks, up to our maxBytesInFlight
+    /**
+     * 循环往复去远程拉去出具
+     * 保证占用内存不超过设定的值spark.reducer.maxMbInFlight*****这个参数很重要
+     * 这个参数在配置文件中max.byte.in.flight,这个参数决定了，能拉去多少数据到本地就开始进行自定义的算子操作
+     */
     while (fetchRequests.nonEmpty &&
       (bytesInFlight == 0 || bytesInFlight + fetchRequests.front.size <= maxBytesInFlight)) {
       sendRequest(fetchRequests.dequeue())
@@ -266,6 +281,7 @@ final class ShuffleBlockFetcherIterator(
     logInfo("Started " + numFetches + " remote fetches in" + Utils.getUsedTimeMs(startTime))
 
     // Get Local Blocks
+    // 拉取完了远程数据之后，将数据放入本地
     fetchLocalBlocks()
     logDebug("Got local blocks in " + Utils.getUsedTimeMs(startTime))
   }

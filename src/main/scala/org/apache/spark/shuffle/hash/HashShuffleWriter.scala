@@ -49,9 +49,17 @@ private[spark] class HashShuffleWriter[K, V](
     writeMetrics)
 
   /** Write a bunch of records to this task's output */
+    /**
+     * 将每个ShuffleMapTask计算出来的新的RDD的partition数据写入到本地磁盘
+     */
   override def write(records: Iterator[_ <: Product2[K, V]]): Unit = {
+    // 首先判断，是否需要在map端本地进行聚合
+    // 如果是reduceBykey的操作，他的dep.aggregator.isDefined就是true
+    // 同时dep.mapSideCombine也是true
+    // 那么map端就会进行本地聚合
     val iter = if (dep.aggregator.isDefined) {
       if (dep.mapSideCombine) {
+        // 这进行本地聚合（hello,1）（hello,1）聚合成====(hello,2)
         dep.aggregator.get.combineValuesByKey(records, context)
       } else {
         records
@@ -60,9 +68,14 @@ private[spark] class HashShuffleWriter[K, V](
       require(!dep.mapSideCombine, "Map-side combine without Aggregator specified!")
       records
     }
-
+    /**
+     * 如果需要本地聚合，先进行本地聚合，然后遍历数组
+     * 对每个数据，调用partitioner，默认是HashPartitioner，生成bucketId
+     * 在这里就决定了每个数据要写入到哪里
+     */
     for (elem <- iter) {
       val bucketId = dep.partitioner.getPartition(elem._1)
+      // 获取到bucketid之后，通过shuffleBlockManager.forMapTask生成bucket对应的Writer，然后用writer将数据写入bucket
       shuffle.writers(bucketId).write(elem)
     }
   }
